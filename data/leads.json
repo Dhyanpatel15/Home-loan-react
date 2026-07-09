@@ -1,0 +1,36 @@
+[
+  {
+    "loanPurpose": "first-home",
+    "propertyStatus": "searching",
+    "state": "Victoria",
+    "suburb": "mhgh",
+    "timeline": "Immediately",
+    "propertyValue": "650000",
+    "deposit": "130000",
+    "loanAmount": "520000",
+    "firstHomeBuyer": "yes",
+    "employment": "Full-time employed",
+    "income": "90000",
+    "secondIncome": "1",
+    "dependents": "1",
+    "creditScore": "Excellent",
+    "preferences": [
+      "redraw"
+    ],
+    "firstName": "yash",
+    "lastName": "pancholi",
+    "email": "yash@gmail.com",
+    "phone": "047895263",
+    "bestTime": "Morning",
+    "consent": true,
+    "summary": {
+      "lvr": 80,
+      "depositPercent": 20,
+      "estimatedMonthlyRepayment": 3165
+    },
+    "id": "LH-1783590393735",
+    "status": "new",
+    "source": "compare-page",
+    "submittedAt": "2026-07-09T09:46:33.735Z"
+  }
+]
