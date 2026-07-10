@@ -1,96 +1,33 @@
-# LoanHub Final Working Project
+# Vercel Lead Submit 500 Fix
 
-This is a complete Next.js + Tailwind project with all requested updates.
+Your submit error happens because Vercel serverless functions cannot write to your project folder at runtime. This update fixes the API route.
 
-## Included changes
+## Replace files
 
-- Home page `Get Started Now` redirects to `/compare`.
-- Home Loans page has been removed from navigation/footer.
-- Compare page includes:
-  - multi-step loan enquiry flow
-  - live tracking panel
-  - no right-side summary/match snapshot
-  - backend API submit
-- Lead functionality includes:
-  - stores leads in `data/leads.json`
-  - email notification ready for Phase 1 using Resend
-  - future API/webhook support
-- Calculator page includes:
-  - Borrowing power
-  - Repayment
-  - Refinance
-  - First home buyer
-  - Investment
-  - Construction
-  - Property value
-  - Offset
-  - Equity
-  - LMI
-  - Stamp duty
-- No `lucide-react` dependency is used.
-- `.npmrc` included to reduce npm lock/cache issues on Windows.
+1. Replace:
+   app/api/leads/route.js
 
-## How to run
+2. Replace/add:
+   app/admin/leads/page.jsx
 
-1. Extract the zip.
-2. Open terminal inside the extracted folder.
-3. Run:
+3. Add/update:
+   .env.local.example
+   supabase_loan_leads.sql
 
-```bash
-npm install --legacy-peer-deps --no-audit --no-fund --package-lock=false
-npm run dev
-```
+## Deploy quickly
 
-Then open:
+Deploy after replacing the files. Submit will stop failing with 500.
 
-```text
-http://localhost:3000
-```
+## Permanent production database
 
-Compare form:
+For real persistent database storage on Vercel, connect Supabase:
 
-```text
-http://localhost:3000/compare
-```
+1. Create a Supabase project.
+2. Run `supabase_loan_leads.sql` in Supabase SQL editor.
+3. Add these Environment Variables in Vercel:
+   SUPABASE_URL
+   SUPABASE_SERVICE_ROLE_KEY
+   SUPABASE_LEADS_TABLE=loan_leads
+4. Redeploy.
 
-Lead API:
-
-```text
-http://localhost:3000/api/leads
-```
-
-## Windows easy start
-
-Double-click or run:
-
-```text
-start-here-windows.bat
-```
-
-If npm crashes, run:
-
-```text
-fix-npm-windows.bat
-```
-
-If the same npm error still appears, install Node.js 20 LTS, restart the computer, then run the script again.
-
-## Email setup
-
-Copy `.env.local.example` to `.env.local`.
-
-Database save works without email settings. To enable email, add:
-
-```env
-LEAD_EMAIL_TO=your-email@example.com
-RESEND_API_KEY=your_resend_api_key
-```
-
-## Future API setup
-
-To send leads to another API/webhook later, add:
-
-```env
-LEAD_WEBHOOK_URL=https://your-api-url.com/leads
-LEAD_WEBHOOK_TOKEN=your_token_if_needed
-```
+Without Supabase, Vercel will use `/tmp` temporary storage, which is only for testing and is not permanent.

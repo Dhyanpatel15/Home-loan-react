@@ -4,8 +4,16 @@ import path from 'path';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const DB_FILE = path.join(DATA_DIR, 'leads.json');
+const IS_VERCEL = Boolean(process.env.VERCEL);
+const LOCAL_DATA_DIR = path.join(process.cwd(), 'data');
+const TMP_DATA_DIR = '/tmp/loanhub';
+const FALLBACK_DATA_DIR = process.env.LEAD_DB_DIR || (IS_VERCEL ? TMP_DATA_DIR : LOCAL_DATA_DIR);
+const FALLBACK_DB_FILE = path.join(FALLBACK_DATA_DIR, 'leads.json');
+
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const SUPABASE_TABLE = process.env.SUPABASE_LEADS_TABLE || 'loan_leads';
+const HAS_SUPABASE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
 
 function cleanText(value) {
   return String(value || '').trim();
@@ -24,22 +32,23 @@ function currency(value) {
   }).format(numberValue(value));
 }
 
-async function readLeads() {
-  try {
-    const raw = await readFile(DB_FILE, 'utf8');
-    return JSON.parse(raw || '[]');
-  } catch (error) {
-    if (error.code === 'ENOENT') return [];
-    throw error;
-  }
-}
-
-async function saveLeadToDatabase(lead) {
-  await mkdir(DATA_DIR, { recursive: true });
-  const leads = await readLeads();
-  leads.push(lead);
-  await writeFile(DB_FILE, JSON.stringify(leads, null, 2), 'utf8');
-  return leads.length;
+function safeLeadBody(body) {
+  return {
+    ...body,
+    firstName: cleanText(body.firstName),
+    lastName: cleanText(body.lastName),
+    email: cleanText(body.email),
+    phone: cleanText(body.phone),
+    loanPurpose: cleanText(body.loanPurpose),
+    propertyStatus: cleanText(body.propertyStatus),
+    state: cleanText(body.state),
+    suburb: cleanText(body.suburb),
+    timeline: cleanText(body.timeline),
+    employment: cleanText(body.employment),
+    creditScore: cleanText(body.creditScore),
+    bestTime: cleanText(body.bestTime),
+    preferences: Array.isArray(body.preferences) ? body.preferences : [],
+  };
 }
 
 function validateLead(body) {
@@ -59,6 +68,119 @@ function validateLead(body) {
   }
 
   return '';
+}
+
+async function readFallbackLeads() {
+  try {
+    const raw = await readFile(FALLBACK_DB_FILE, 'utf8');
+    const parsed = JSON.parse(raw || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    console.error('Fallback lead read error:', error);
+    return [];
+  }
+}
+
+async function saveLeadToFallbackFile(lead) {
+  await mkdir(FALLBACK_DATA_DIR, { recursive: true });
+  const leads = await readFallbackLeads();
+  leads.unshift(lead);
+  await writeFile(FALLBACK_DB_FILE, JSON.stringify(leads, null, 2), 'utf8');
+
+  return {
+    status: IS_VERCEL ? 'saved-temporary' : 'saved',
+    storage: IS_VERCEL ? 'vercel-tmp' : 'local-json',
+    totalLeads: leads.length,
+    message: IS_VERCEL
+      ? 'Lead saved to Vercel /tmp temporary storage. Add Supabase ENV for permanent database storage.'
+      : 'Lead saved to local data/leads.json.',
+  };
+}
+
+async function saveLeadToSupabase(lead) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, {
+    method: 'POST',
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      'Content-Type': 'application/json',
+      Prefer: 'return=representation',
+    },
+    body: JSON.stringify({
+      id: lead.id,
+      submitted_at: lead.submittedAt,
+      lead,
+    }),
+  });
+
+  const result = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const message = result?.message || result?.hint || `Supabase returned ${response.status}`;
+    throw new Error(message);
+  }
+
+  return {
+    status: 'saved',
+    storage: 'supabase',
+    providerResult: result,
+  };
+}
+
+async function saveLeadToDatabase(lead) {
+  if (HAS_SUPABASE) {
+    try {
+      return await saveLeadToSupabase(lead);
+    } catch (error) {
+      console.error('Supabase save failed, using fallback storage:', error);
+      const fallback = await saveLeadToFallbackFile(lead);
+      return {
+        ...fallback,
+        status: 'saved-fallback',
+        supabaseError: error.message,
+      };
+    }
+  }
+
+  return saveLeadToFallbackFile(lead);
+}
+
+async function readSupabaseLeads() {
+  const response = await fetch(
+    `${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?select=id,submitted_at,lead&order=submitted_at.desc`,
+    {
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+      },
+      cache: 'no-store',
+    }
+  );
+
+  const rows = await response.json().catch(() => []);
+
+  if (!response.ok) {
+    throw new Error(rows?.message || `Supabase returned ${response.status}`);
+  }
+
+  return Array.isArray(rows) ? rows.map((row) => row.lead || row) : [];
+}
+
+async function readLeadsFromDatabase() {
+  if (HAS_SUPABASE) {
+    try {
+      const leads = await readSupabaseLeads();
+      return { storage: 'supabase', leads };
+    } catch (error) {
+      console.error('Supabase read failed, using fallback storage:', error);
+      const leads = await readFallbackLeads();
+      return { storage: 'fallback', leads, supabaseError: error.message };
+    }
+  }
+
+  const leads = await readFallbackLeads();
+  return { storage: IS_VERCEL ? 'vercel-tmp' : 'local-json', leads };
 }
 
 function createEmailHtml(lead) {
@@ -106,33 +228,40 @@ async function sendLeadEmail(lead) {
     };
   }
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from,
-      to,
-      subject: `New LoanHub Lead - ${lead.firstName} ${lead.lastName}`,
-      html: createEmailHtml(lead),
-    }),
-  });
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from,
+        to,
+        subject: `New LoanHub Lead - ${lead.firstName} ${lead.lastName}`,
+        html: createEmailHtml(lead),
+      }),
+    });
 
-  const result = await response.json().catch(() => ({}));
+    const result = await response.json().catch(() => ({}));
 
-  if (!response.ok) {
+    if (!response.ok) {
+      return {
+        status: 'failed',
+        message: result.message || 'Email provider rejected the request.',
+      };
+    }
+
+    return {
+      status: 'sent',
+      providerId: result.id || null,
+    };
+  } catch (error) {
     return {
       status: 'failed',
-      message: result.message || 'Email provider rejected the request.',
+      message: error.message || 'Email request failed.',
     };
   }
-
-  return {
-    status: 'sent',
-    providerId: result.id || null,
-  };
 }
 
 async function sendLeadToFutureApi(lead) {
@@ -145,23 +274,32 @@ async function sendLeadToFutureApi(lead) {
     };
   }
 
-  const response = await fetch(webhookUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: process.env.LEAD_WEBHOOK_TOKEN ? `Bearer ${process.env.LEAD_WEBHOOK_TOKEN}` : '',
-    },
-    body: JSON.stringify(lead),
-  });
+  try {
+    const response = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(process.env.LEAD_WEBHOOK_TOKEN
+          ? { Authorization: `Bearer ${process.env.LEAD_WEBHOOK_TOKEN}` }
+          : {}),
+      },
+      body: JSON.stringify(lead),
+    });
 
-  if (!response.ok) {
+    if (!response.ok) {
+      return {
+        status: 'failed',
+        message: `Future API returned ${response.status}`,
+      };
+    }
+
+    return { status: 'sent' };
+  } catch (error) {
     return {
       status: 'failed',
-      message: `Future API returned ${response.status}`,
+      message: error.message || 'Future API request failed.',
     };
   }
-
-  return { status: 'sent' };
 }
 
 export async function POST(request) {
@@ -173,8 +311,9 @@ export async function POST(request) {
       return Response.json({ success: false, message: validationError }, { status: 400 });
     }
 
+    const safeBody = safeLeadBody(body);
     const lead = {
-      ...body,
+      ...safeBody,
       id: `LH-${Date.now()}`,
       status: 'new',
       source: 'compare-page',
@@ -186,22 +325,26 @@ export async function POST(request) {
       },
     };
 
-    const totalLeads = await saveLeadToDatabase(lead);
+    const database = await saveLeadToDatabase(lead);
     const email = await sendLeadEmail(lead);
     const futureApi = await sendLeadToFutureApi(lead);
 
     return Response.json({
       success: true,
-      message: 'Lead saved successfully.',
+      message: 'Lead submitted successfully.',
       leadId: lead.id,
-      totalLeads,
+      totalLeads: database.totalLeads || null,
+      database,
       email,
       futureApi,
     });
   } catch (error) {
-    console.error('Lead submission error:', error);
+    console.error('Lead submission fatal error:', error);
     return Response.json(
-      { success: false, message: 'Unable to submit lead. Please try again.' },
+      {
+        success: false,
+        message: error.message || 'Unable to submit lead. Please try again.',
+      },
       { status: 500 }
     );
   }
@@ -209,13 +352,16 @@ export async function POST(request) {
 
 export async function GET() {
   try {
-    const leads = await readLeads();
-    return Response.json({ success: true, total: leads.length, leads });
+    const result = await readLeadsFromDatabase();
+    return Response.json({
+      success: true,
+      storage: result.storage,
+      total: result.leads.length,
+      leads: result.leads,
+      supabaseError: result.supabaseError || null,
+    });
   } catch (error) {
-    console.error('Lead read error:', error);
-    return Response.json(
-      { success: false, message: 'Unable to read leads.' },
-      { status: 500 }
-    );
+    console.error('Lead read fatal error:', error);
+    return Response.json({ success: true, storage: 'error', total: 0, leads: [], message: error.message });
   }
 }
